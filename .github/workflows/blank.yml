@@ -1,130 +1,63 @@
-name: Make TWRP Device (Android 15 Optimized)
+name: Make TWRP Device
 
 on:
   workflow_dispatch:
     inputs:
-      IMGURL:
-        description: 'URL of initboot.img (Android 15 REQUIRED)'
+      LIBRARY_NAME:
+        description: 'LIBRARY_NAME'
         required: true
+        default: 'Twrp_Device_Genter'
+      IMG_URL:
+        description: 'IMG_URL'
+        required: true
+        default: 'https://github.com/momo54181/action_build_twrp_device_tree/raw/main/recovery.img'
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+    if: github.event.repository.owner.id == github.event.sender.id
+    runs-on: ubuntu-22.04
+
     
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Download initboot.img
+    - name: Check Out
+      uses: actions/checkout@main
+      
+    - name: Prepare the environment
       run: |
-        curl -L -o initboot.img "${{ github.event.inputs.IMGURL }}"
-        echo "Downloaded initboot.img:"
-        file initboot.img
-
-    - name: Install dependencies
+        sudo apt update
+        sudo apt -y install python2 python3 python3-pip python3-pip cpio wget
+        
+    - name: Set variables
       run: |
-        sudo apt-get update
-        sudo apt-get install -y git wget unzip python3 python3-pip cpio
-        pip3 install requests
-
-    - name: Clone Magisk
+        echo "name=date::$(date +%F)" >> $GITHUB_OUTPUT
+      id: var
+      
+    - name: Install TWRP generator 
       run: |
-        git clone https://github.com/topjohnwu/Magisk.git
-        cd Magisk
-        git submodule update --init --recursive
-
-    - name: Install NDK
-      working-directory: Magisk
+        pip3 install twrpdtgen
+        mkdir dt
+    
+    - name: Download boot or recovery img
       run: |
-        python3 build.py ndk
-        echo "NDK installation directory:"
-        ls -la
-        if [ -d "ndk" ]; then
-          echo "NDK found in Magisk/ndk"
-          echo "ANDROID_NDK_HOME=$PWD/ndk" >> $GITHUB_ENV
-        else
-          echo "NDK directory not found in Magisk"
-          # 尝试在父目录查找
-          if [ -d "../ndk" ]; then
-            echo "NDK found in parent directory"
-            echo "ANDROID_NDK_HOME=$PWD/../ndk" >> $GITHUB_ENV
-          else
-            echo "NDK directory not found anywhere"
-            exit 1
-          fi
-        fi
-
-    - name: Build Magisk
-      working-directory: Magisk
+        rm *.bin || echo no bin XD
+        rm *.img || echo no img XD
+        echo download
+        wget ${{ github.event.inputs.IMG_URL }}
+        ls
+      
+    - name: Start build
       run: |
-        echo "Building Magisk..."
-        python3 build.py native
-        echo "Build completed. Checking output directory:"
-        ls -la native/out/
-        echo "Searching for magiskboot binary:"
-        find . -name "magiskboot" -type f
-
-    - name: Copy magiskboot
+        python3 -m twrpdtgen -o dt/ *.img
+    - name: ZIP device tree
       run: |
-        echo "Searching for magiskboot in Magisk directory..."
-        find Magisk -name "magiskboot" -type f -exec cp {} . \;
-        if [ -f "magiskboot" ]; then
-          echo "magiskboot copied successfully"
-          file magiskboot
-        else
-          echo "ERROR: magiskboot not found"
-          exit 1
-        fi
-
-    - name: Extract device tree
-      run: |
-        echo "Extracting device tree from initboot.img..."
-        ./magiskboot unpack initboot.img
-        echo "Unpacked files:"
-        ls -la
-        if [ -f "kernel_dtb" ]; then
-          echo "Found kernel_dtb"
-          mv kernel_dtb devicetree.dtb
-        elif [ -f "dtb" ]; then
-          echo "Found dtb"
-          mv dtb devicetree.dtb
-        else
-          echo "ERROR: No device tree file found"
-          exit 1
-        fi
-        echo "Device tree extracted successfully"
-        file devicetree.dtb
-
-    - name: Repack initboot.img
-      run: |
-        echo "Repacking initboot.img with extracted device tree..."
-        ./magiskboot repack initboot.img
-        echo "Repacked files:"
-        ls -la
-        if [ -f "new-boot.img" ]; then
-          mv new-boot.img newinitboot.img
-          echo "Repacked image saved as newinitboot.img"
-          file newinitboot.img
-        else
-          echo "ERROR: Repacked image not found"
-          exit 1
-        fi
-
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
+        zip -r DeviceTree.zip ./dt
+    - name: Upload to Release
+      uses: softprops/action-gh-release@v1
       with:
-        name: twrp-device-tree
-        path: |
-          devicetree.dtb
-          newinitboot.img
-        retention-days: 30
-
-    - name: Generate build report
-      run: |
-        echo "## Build Report" >> $GITHUB_STEP_SUMMARY
-        echo "- **Build Status**: Success" >> $GITHUB_STEP_SUMMARY
-        echo "- **Device Tree**: devicetree.dtb" >> $GITHUB_STEP_SUMMARY
-        echo "- **Repacked Image**: newinitboot.img" >> $GITHUB_STEP_SUMMARY
-        echo "- **Build Date**: $(date "+%Y-%m-%d %H:%M:%S")" >> $GITHUB_STEP_SUMMARY
-        echo "- **Source**: Compiled from source" >> $GITHUB_STEP_SUMMARY
+        files: |
+          ./DeviceTree.zip
+        name: TWRP_Device_Tree-${{ github.run_id }}
+        tag_name: ${{ github.run_id }}
+        body: DeviceTree for twrp
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
